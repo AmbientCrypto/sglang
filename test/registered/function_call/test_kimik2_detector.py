@@ -273,20 +273,72 @@ class TestKimiK2DetectorSpecialTokenLeakage(unittest.TestCase):
     def test_no_leak_on_error_fallback(self):
         """On parse errors, normal_text fallback has tokens stripped."""
         cleaned = _strip_special_tokens(
-            "leaked<|tool_calls_section_begin|>" "<|tool_call_end|>content"
+            "leaked<|tool_calls_section_begin|><|tool_call_end|>content"
         )
         self.assertEqual(cleaned, "leakedcontent")
 
     def test_strip_special_tokens_all_tokens(self):
-        """All 5 known special tokens are stripped."""
+        """All known special tokens are stripped."""
         dirty = (
             "<|tool_calls_section_begin|>"
             "<|tool_call_begin|>"
             "<|tool_call_argument_begin|>"
             "<|tool_call_end|>"
             "<|tool_calls_section_end|>"
+            "<|tool_call_result_begin|>"
+            "<|tool_call_result_end|>"
+            "<|local_hash_begin|>"
+            "<|local_hash_end|>"
         )
         self.assertEqual(_strip_special_tokens(dirty), "")
+
+    def test_strip_special_token_spans(self):
+        """Tool result and local hash payloads are stripped with their delimiters."""
+        dirty = (
+            "before"
+            "<|tool_call_result_begin|>functions.calculate:0"
+            "<|tool_call_result_end|>"
+            "middle"
+            "<|local_hash_begin|>07HDSIoJoJ<|local_hash_end|>"
+            "after"
+        )
+        self.assertEqual(_strip_special_tokens(dirty), "beforemiddleafter")
+
+    def test_partial_special_token_suffix_is_buffered(self):
+        """Partial markers at chunk boundaries are not emitted as normal text."""
+        detector = KimiK2FuncDetector()
+
+        first = detector.parse_streaming_increment("hello<|tool", self.tools)
+        self.assertEqual(first.normal_text, "hello")
+
+        second = detector.parse_streaming_increment(
+            "_calls_section_end|>world", self.tools
+        )
+        self.assertEqual(second.normal_text, "world")
+        self.assertNotIn("<|", first.normal_text + second.normal_text)
+
+    def test_post_tool_marker_tail_is_suppressed(self):
+        """Kimi marker tails after a completed tool call are not streamed as text."""
+        detector = KimiK2FuncDetector()
+        chunks = [
+            "<|tool_calls_section_begin|>"
+            "<|tool_call_begin|>functions.ReadFile:0"
+            '<|tool_call_argument_begin|>{"path": "/tmp/a"}'
+            "<|tool_call_end|>",
+            "<|tool_calls_section_end|>"
+            "<|tool_call_result_begin|>functions.ReadFile:0"
+            "<|tool_call_result_end|>"
+            "<|local_hash_begin|>abc<|local_hash_end|>",
+        ]
+
+        tool_calls, normal_text = _collect_streaming_tool_calls(
+            detector, chunks, self.tools
+        )
+
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], "ReadFile")
+        self.assertEqual(json.loads(tool_calls[0]["parameters"]), {"path": "/tmp/a"})
+        self.assertEqual(normal_text, "")
 
     def test_strip_preserves_normal_text(self):
         """Stripping doesn't affect normal text content."""

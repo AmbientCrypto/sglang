@@ -21,11 +21,22 @@ _KIMI_K2_SPECIAL_TOKENS = [
     "<|tool_call_begin|>",
     "<|tool_call_end|>",
     "<|tool_call_argument_begin|>",
+    "<|tool_call_result_begin|>",
+    "<|tool_call_result_end|>",
+    "<|local_hash_begin|>",
+    "<|local_hash_end|>",
+]
+
+_KIMI_K2_SPECIAL_TOKEN_SPANS = [
+    re.compile(r"<\|tool_call_result_begin\|>.*?<\|tool_call_result_end\|>", re.DOTALL),
+    re.compile(r"<\|local_hash_begin\|>.*?<\|local_hash_end\|>", re.DOTALL),
 ]
 
 
 def _strip_special_tokens(text: str) -> str:
     """Remove all Kimi-K2 tool-call special tokens from text."""
+    for span in _KIMI_K2_SPECIAL_TOKEN_SPANS:
+        text = span.sub("", text)
     for token in _KIMI_K2_SPECIAL_TOKENS:
         text = text.replace(token, "")
     return text
@@ -151,6 +162,15 @@ class KimiK2Detector(BaseFormatDetector):
 
         return best_name
 
+    def _partial_special_token_suffix_len(self, text: str) -> int:
+        return max(
+            (
+                self._ends_with_partial_token(text, token)
+                for token in _KIMI_K2_SPECIAL_TOKENS
+            ),
+            default=0,
+        )
+
     def has_tool_call(self, text: str) -> bool:
         """Check if the text contains a KimiK2 format tool call."""
         return self.bot_token in text
@@ -211,9 +231,16 @@ class KimiK2Detector(BaseFormatDetector):
         )
 
         if not has_tool_call:
-            self._buffer = ""
-            normal_text = _strip_special_tokens(new_text)
-            return StreamingParseResult(normal_text=normal_text)
+            partial_len = self._partial_special_token_suffix_len(current_text)
+            if partial_len:
+                self._buffer = current_text[-partial_len:]
+                normal_text = current_text[:-partial_len]
+            else:
+                self._buffer = ""
+                normal_text = current_text
+            if self.current_tool_id >= 0:
+                return StreamingParseResult()
+            return StreamingParseResult(normal_text=_strip_special_tokens(normal_text))
 
         if not hasattr(self, "_tool_indices"):
             self._tool_indices = self._get_tool_indices(tools)
@@ -262,58 +289,61 @@ class KimiK2Detector(BaseFormatDetector):
                         "name": function_name,
                         "arguments": {},
                     }
-                else:
-                    argument_diff = (
-                        function_args[len(self._last_arguments) :]
-                        if function_args.startswith(self._last_arguments)
-                        else function_args
+
+                argument_diff = (
+                    function_args[len(self._last_arguments) :]
+                    if function_args.startswith(self._last_arguments)
+                    else function_args
+                )
+
+                parsed_args_diff = argument_diff.split(self.tool_call_end_token, 1)[0]
+                partial_len = self._partial_special_token_suffix_len(parsed_args_diff)
+                if partial_len:
+                    parsed_args_diff = parsed_args_diff[:-partial_len]
+
+                if parsed_args_diff:
+                    calls.append(
+                        ToolCallItem(
+                            tool_index=self.current_tool_id,
+                            name=None,
+                            parameters=parsed_args_diff,
+                        )
+                    )
+                    self._last_arguments += parsed_args_diff
+                    self.streamed_args_for_tool[self.current_tool_id] += (
+                        parsed_args_diff
                     )
 
-                    parsed_args_diff = argument_diff.split(self.tool_call_end_token, 1)[
-                        0
-                    ]
-
-                    if parsed_args_diff:
-                        calls.append(
-                            ToolCallItem(
-                                tool_index=self.current_tool_id,
-                                name=None,
-                                parameters=parsed_args_diff,
-                            )
+                parsed_args = function_args.split(self.tool_call_end_token, 1)[0]
+                if self.tool_call_end_token in function_args and _is_complete_json(
+                    parsed_args
+                ):
+                    try:
+                        parsed_args = json.loads(parsed_args)
+                        self.prev_tool_call_arr[self.current_tool_id]["arguments"] = (
+                            parsed_args
                         )
-                        self._last_arguments += parsed_args_diff
-                        self.streamed_args_for_tool[
-                            self.current_tool_id
-                        ] += parsed_args_diff
+                    except json.JSONDecodeError:
+                        pass
 
-                    parsed_args = function_args.split(self.tool_call_end_token, 1)[0]
-                    if _is_complete_json(parsed_args):
-                        try:
-                            parsed_args = json.loads(parsed_args)
-                            self.prev_tool_call_arr[self.current_tool_id][
-                                "arguments"
-                            ] = parsed_args
-                        except json.JSONDecodeError:
-                            pass
+                    # Find the end of the current tool call and remove only that part from buffer
+                    tool_call_end_pattern = (
+                        r"<\|tool_call_begin\|>.*?<\|tool_call_end\|>"
+                    )
+                    end_match = re.search(
+                        tool_call_end_pattern, current_text, re.DOTALL
+                    )
+                    if end_match:
+                        self._buffer = current_text[end_match.end() :]
+                    else:
+                        self._buffer = ""
 
-                        # Find the end of the current tool call and remove only that part from buffer
-                        tool_call_end_pattern = (
-                            r"<\|tool_call_begin\|>.*?<\|tool_call_end\|>"
-                        )
-                        end_match = re.search(
-                            tool_call_end_pattern, current_text, re.DOTALL
-                        )
-                        if end_match:
-                            self._buffer = current_text[end_match.end() :]
-                        else:
-                            self._buffer = ""
-
-                        result = StreamingParseResult(normal_text="", calls=calls)
-                        self.current_tool_id += 1
-                        self._last_arguments = ""
-                        self.current_tool_name_sent = False
-                        self._current_stream_function_name = None
-                        return result
+                    result = StreamingParseResult(normal_text="", calls=calls)
+                    self.current_tool_id += 1
+                    self._last_arguments = ""
+                    self.current_tool_name_sent = False
+                    self._current_stream_function_name = None
+                    return result
 
             return StreamingParseResult(normal_text="", calls=calls)
 
