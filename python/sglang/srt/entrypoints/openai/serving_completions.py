@@ -328,7 +328,9 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 # /abort_request or session lifecycle cleanup) falls through
                 # to the normal chunk path, matching the non-stream behavior
                 # in tokenizer_manager._handle_abort_finish_reason.
-                code = _coerce_http_status(finish_reason.get("status_code"))
+                code = _coerce_http_status(
+                    finish_reason.get("status_code") if finish_reason else None
+                )
                 if finish_reason_type == "abort" and code is not None:
                     error = self.create_streaming_error_response(
                         finish_reason.get("message", "Generation aborted."),
