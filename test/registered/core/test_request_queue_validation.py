@@ -24,7 +24,9 @@ register_amd_ci(est_time=70, suite="stage-b-test-1-gpu-small-amd")
 class TestMaxQueuedRequests(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = os.environ.get(
+            "SGLANG_TEST_REQUEST_QUEUE_MODEL", DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        )
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")
@@ -71,7 +73,7 @@ class TestMaxQueuedRequests(CustomTestCase):
         )
         self.assertLessEqual(status_codes.count(200), 2)
 
-        # expected_status_codes = [200, 200, 503, 503, 503, 503, 503, 503, 503, 503]
+        # expected_status_codes = [200, 200, 429, 429, 429, 429, 429, 429, 429, 429]
         # self.assertEqual(status_codes, expected_status_codes)
 
     def test_max_running_requests_and_max_queued_request_validation(self):

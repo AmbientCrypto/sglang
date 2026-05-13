@@ -30,7 +30,7 @@ class _TraceCtx:
 def _req(rid: str, priority=None):
     return SimpleNamespace(
         rid=rid,
-        priority=priority,
+        priority=0 if priority is None else priority,
         time_stats=SimpleNamespace(trace_ctx=_TraceCtx(), wait_queue_entry_time=0.0),
     )
 
@@ -66,6 +66,8 @@ def _scheduler(
     scheduler.max_queued_requests = max_queued_requests
     scheduler.limit_queue_to_running_capacity = limit_queue_to_running_capacity
     scheduler.enable_priority_scheduling = False
+    scheduler.enable_hicache_storage = False
+    scheduler.enable_hierarchical_cache = False
     scheduler.send_to_tokenizer = MagicMock()
     return scheduler
 
@@ -141,6 +143,50 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
         )
 
         self.assertTrue(Scheduler._abort_on_queued_limit(scheduler, _req("incoming")))
+
+    def test_priority_rejects_incoming_queue_full_as_429(self):
+        scheduler = _scheduler(
+            waiting=1,
+            running=0,
+            max_running_requests=128,
+            max_queued_requests=1,
+            limit_queue_to_running_capacity=False,
+        )
+        scheduler.enable_priority_scheduling = True
+        scheduler.schedule_low_priority_values_first = False
+        scheduler.waiting_queue = [_req("waiting", priority=10)]
+        incoming = _req("incoming", priority=1)
+
+        self.assertTrue(Scheduler._abort_on_queued_limit(scheduler, incoming))
+
+        out, req = scheduler.send_to_tokenizer.send_output.call_args.args
+        self.assertIs(req, incoming)
+        self.assertEqual(out.finished_reason["status_code"], 429)
+        self.assertEqual(out.finished_reason["message"], "The request queue is full.")
+
+    def test_priority_preempts_existing_request_as_503(self):
+        scheduler = _scheduler(
+            waiting=1,
+            running=0,
+            max_running_requests=128,
+            max_queued_requests=1,
+            limit_queue_to_running_capacity=False,
+        )
+        scheduler.enable_priority_scheduling = True
+        scheduler.schedule_low_priority_values_first = False
+        waiting_req = _req("waiting", priority=1)
+        scheduler.waiting_queue = [waiting_req]
+        incoming = _req("incoming", priority=10)
+
+        self.assertFalse(Scheduler._abort_on_queued_limit(scheduler, incoming))
+
+        out, req = scheduler.send_to_tokenizer.send_output.call_args.args
+        self.assertIs(req, waiting_req)
+        self.assertEqual(out.finished_reason["status_code"], 503)
+        self.assertEqual(
+            out.finished_reason["message"],
+            "The request is aborted by a higher priority request.",
+        )
 
 
 if __name__ == "__main__":
