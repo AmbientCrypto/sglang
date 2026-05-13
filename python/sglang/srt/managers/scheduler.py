@@ -2294,10 +2294,16 @@ class Scheduler(
             for req in getattr(grammar_manager, "grammar_queue", []):
                 add(req)
 
-        running_batch = getattr(self, "running_batch", None)
-        if running_batch is not None:
-            for req in getattr(running_batch, "reqs", []):
+        for batch_name in ("running_batch", "cur_batch", "last_batch"):
+            batch = getattr(self, batch_name, None)
+            if batch is None:
+                continue
+            for req in getattr(batch, "reqs", []):
                 add(req)
+
+        chunked_req = getattr(self, "chunked_req", None)
+        if chunked_req is not None:
+            add(chunked_req)
 
         return len(seen)
 

@@ -39,7 +39,10 @@ def _scheduler(
     *,
     waiting=0,
     running=0,
+    current=0,
+    previous=0,
     grammar=0,
+    chunked=False,
     max_running_requests=4,
     max_queued_requests=1,
     limit_queue_to_running_capacity=True,
@@ -49,6 +52,13 @@ def _scheduler(
     scheduler.running_batch = SimpleNamespace(
         reqs=[_req(f"running-{i}") for i in range(running)]
     )
+    scheduler.cur_batch = SimpleNamespace(
+        reqs=[_req(f"current-{i}") for i in range(current)]
+    )
+    scheduler.last_batch = SimpleNamespace(
+        reqs=[_req(f"previous-{i}") for i in range(previous)]
+    )
+    scheduler.chunked_req = _req("chunked") if chunked else None
     scheduler.grammar_manager = SimpleNamespace(
         grammar_queue=[_req(f"grammar-{i}") for i in range(grammar)]
     )
@@ -61,16 +71,26 @@ def _scheduler(
 
 
 class TestSchedulerAdmissionLimit(unittest.TestCase):
-    def test_active_admitted_count_includes_waiting_running_and_grammar(self):
-        scheduler = _scheduler(waiting=2, running=3, grammar=1)
+    def test_active_admitted_count_includes_scheduler_live_state(self):
+        scheduler = _scheduler(
+            waiting=2,
+            running=3,
+            current=1,
+            previous=1,
+            grammar=1,
+            chunked=True,
+        )
 
-        self.assertEqual(Scheduler._active_admitted_request_count(scheduler), 6)
+        self.assertEqual(Scheduler._active_admitted_request_count(scheduler), 9)
 
     def test_active_admitted_count_deduplicates_by_rid(self):
         scheduler = _scheduler(waiting=0, running=0, grammar=0)
         shared = _req("same-rid")
         scheduler.waiting_queue = [shared]
         scheduler.running_batch.reqs = [shared, _req("same-rid")]
+        scheduler.cur_batch.reqs = [_req("same-rid")]
+        scheduler.last_batch.reqs = [_req("same-rid")]
+        scheduler.chunked_req = _req("same-rid")
         scheduler.grammar_manager.grammar_queue = [_req("other-rid")]
 
         self.assertEqual(Scheduler._active_admitted_request_count(scheduler), 2)
