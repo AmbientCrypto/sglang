@@ -15,7 +15,6 @@
 
 import faulthandler
 import logging
-import os
 import signal
 import sys
 import time
@@ -1036,6 +1035,9 @@ class Scheduler(
 
     def init_running_status(self):
         self.waiting_queue: List[Req] = []
+        self.limit_admitted_requests_to_running_capacity = (
+            self.server_args.limit_admitted_requests_to_running_capacity
+        )
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
         # The current forward batch
@@ -2266,18 +2268,63 @@ class Scheduler(
             return False
         return True
 
-    def _abort_on_queued_limit(self, recv_req: Req) -> bool:
-        """Abort an incoming or existing request if the waiting queue is full. Returns True if the incoming request is aborted."""
+    def _active_admitted_request_count(self) -> int:
+        """Count requests admitted into the scheduler's request-capacity pools."""
+        seen = set()
+
+        def add(req: Req):
+            rid = getattr(req, "rid", None)
+            key = ("rid", rid) if rid is not None else ("obj", id(req))
+            seen.add(key)
+
+        for req in self.waiting_queue:
+            add(req)
+
+        grammar_manager = getattr(self, "grammar_manager", None)
+        if grammar_manager is not None:
+            for req in getattr(grammar_manager, "grammar_queue", []):
+                add(req)
+
+        for batch_name in ("running_batch", "cur_batch", "last_batch"):
+            batch = getattr(self, batch_name, None)
+            if batch is None:
+                continue
+            for req in getattr(batch, "reqs", []):
+                add(req)
+
+        chunked_req = getattr(self, "chunked_req", None)
+        if chunked_req is not None:
+            add(chunked_req)
+
+        return len(seen)
+
+    def _queued_limit_reached(self) -> bool:
         if (
-            self.max_queued_requests is None
-            or len(self.waiting_queue) + 1 <= self.max_queued_requests
+            getattr(self, "limit_admitted_requests_to_running_capacity", False)
+            and self.max_running_requests is not None
+            and self._active_admitted_request_count() + 1
+            > self.max_running_requests
         ):
+            return True
+
+        return (
+            self.max_queued_requests is not None
+            and len(self.waiting_queue) + 1 > self.max_queued_requests
+        )
+
+    def _abort_on_queued_limit(self, recv_req: Req) -> bool:
+        """Abort when scheduler admission is full.
+
+        Returns True if the incoming request is aborted.
+        """
+        if not self._queued_limit_reached():
             return False
 
         # Reject the incoming request by default.
         req_to_abort = recv_req
         message = "The request queue is full."
-        if self.enable_priority_scheduling:
+        status_code = HTTPStatus.TOO_MANY_REQUESTS
+        if self.enable_priority_scheduling and len(self.waiting_queue) > 0:
             # With priority scheduling, consider aboritng an existing request based on the priority.
             # direction = 1  => smaller number = higher priority; -1 => larger number = higher priority.
             # max(...) + (direction * priority, queue_time_start) picks the least-preferred request.
@@ -2300,12 +2347,13 @@ class Scheduler(
                 self.waiting_queue.pop(idx)
                 req_to_abort = candidate_req
                 message = "The request is aborted by a higher priority request."
+                status_code = HTTPStatus.SERVICE_UNAVAILABLE
 
         self.send_to_tokenizer.send_output(
             AbortReq(
                 finished_reason={
                     "type": "abort",
-                    "status_code": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "status_code": status_code,
                     "message": message,
                 },
                 rid=req_to_abort.rid,

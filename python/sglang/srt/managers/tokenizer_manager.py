@@ -124,6 +124,16 @@ _REQUEST_STATE_WAIT_TIMEOUT = envs.SGLANG_REQUEST_STATE_WAIT_TIMEOUT.get()
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_http_status(status_code: Any) -> Optional[HTTPStatus]:
+    if status_code is None:
+        return None
+    try:
+        return HTTPStatus(status_code)
+    except ValueError:
+        return None
+
+
 _INCREMENTAL_STREAMING_META_INFO_KEYS = (
     "output_token_logprobs",
     "output_top_logprobs",
@@ -1243,18 +1253,18 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         for normal flow. Raises ValueError or HTTPException for non-stream aborts.
         """
         finish_reason = out["meta_info"]["finish_reason"]
+        status_code = _coerce_http_status(finish_reason.get("status_code"))
 
         if (
             finish_reason.get("type") == "abort"
-            and finish_reason.get("status_code") == HTTPStatus.BAD_REQUEST
+            and status_code == HTTPStatus.BAD_REQUEST
         ):
             if not is_stream:
                 raise ValueError(finish_reason["message"])
             return out
 
-        if finish_reason.get("type") == "abort" and finish_reason.get(
-            "status_code"
-        ) in (
+        if finish_reason.get("type") == "abort" and status_code in (
+            HTTPStatus.TOO_MANY_REQUESTS,
             HTTPStatus.SERVICE_UNAVAILABLE,
             HTTPStatus.INTERNAL_SERVER_ERROR,
         ):
@@ -1268,7 +1278,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                 await self.lora_registry.release(state.obj.lora_id)
             if not is_stream:
                 raise fastapi.HTTPException(
-                    status_code=finish_reason["status_code"],
+                    status_code=status_code.value,
                     detail=finish_reason["message"],
                 )
             return out

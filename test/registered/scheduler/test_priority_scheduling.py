@@ -24,7 +24,9 @@ register_amd_ci(est_time=195, suite="stage-b-test-1-gpu-small-amd")
 class TestPriorityScheduling(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = os.environ.get(
+            "SGLANG_TEST_REQUEST_QUEUE_MODEL", DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        )
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")
@@ -148,9 +150,9 @@ class TestPriorityScheduling(CustomTestCase):
             (200, None),
             (200, None),
             (200, None),
-            (503, "The request queue is full."),
-            (503, "The request queue is full."),
-            (503, "The request queue is full."),
+            (429, "The request queue is full."),
+            (429, "The request queue is full."),
+            (429, "The request queue is full."),
         ]
 
         e2e_latencies = []
@@ -230,7 +232,9 @@ class TestPriorityScheduling(CustomTestCase):
 class TestPrioritySchedulingMultipleRunningRequests(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = os.environ.get(
+            "SGLANG_TEST_REQUEST_QUEUE_MODEL", DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        )
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")

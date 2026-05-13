@@ -60,6 +60,15 @@ _SSE_DATA_B = b"data: "
 _SSE_NL_B = b"\n\n"
 
 
+def _coerce_http_status(status_code: Any) -> Optional[HTTPStatus]:
+    if status_code is None:
+        return None
+    try:
+        return HTTPStatus(status_code)
+    except ValueError:
+        return None
+
+
 class _StreamDelta(msgspec.Struct, omit_defaults=True):
     # OpenAI Python SDK's ChoiceDelta does not declare reasoning_content; it is
     # surfaced via pydantic `extra`. With omit_defaults=True, defaulting to
@@ -881,10 +890,8 @@ class OpenAIServingChat(OpenAIServingBase):
                     # /abort_request or session lifecycle cleanup) falls through
                     # to the normal chunk path, matching the non-stream behavior
                     # in tokenizer_manager._handle_abort_finish_reason.
-                    if finish_reason_type == "abort" and isinstance(
-                        finish_reason.get("status_code"), HTTPStatus
-                    ):
-                        code = finish_reason["status_code"]
+                    code = _coerce_http_status(finish_reason.get("status_code"))
+                    if finish_reason_type == "abort" and code is not None:
                         error = self.create_streaming_error_response(
                             finish_reason.get("message", "Generation aborted."),
                             code.name,

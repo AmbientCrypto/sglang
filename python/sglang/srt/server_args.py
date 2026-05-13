@@ -404,6 +404,7 @@ class ServerArgs:
     mem_fraction_static: Optional[float] = None
     max_running_requests: Optional[int] = None
     max_queued_requests: Optional[int] = None
+    limit_admitted_requests_to_running_capacity: bool = False
     max_total_tokens: Optional[int] = None
     chunked_prefill_size: Optional[int] = None
     enable_dynamic_chunking: bool = False
@@ -4596,6 +4597,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.max_queued_requests,
             help="The maximum number of queued requests. This option is ignored when using disaggregation-mode.",
+        )
+        parser.add_argument(
+            "--limit-admitted-requests-to-running-capacity",
+            action="store_true",
+            default=ServerArgs.limit_admitted_requests_to_running_capacity,
+            help="Reject new requests once total admitted scheduler work reaches --max-running-requests while still enforcing --max-queued-requests.",
         )
         parser.add_argument(
             "--max-total-tokens",

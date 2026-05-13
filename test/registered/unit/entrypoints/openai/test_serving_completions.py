@@ -14,7 +14,16 @@ from http import HTTPStatus
 from typing import Optional
 from unittest.mock import AsyncMock, Mock
 
+import torch.cuda.memory as cuda_memory
 from fastapi import Request
+
+for name in (
+    "_cuda_beginAllocateCurrentThreadToPool",
+    "_cuda_endAllocateToPool",
+    "_cuda_releasePool",
+):
+    if not hasattr(cuda_memory, name):
+        setattr(cuda_memory, name, lambda *_, **__: None)
 
 from sglang.srt.entrypoints.openai.protocol import CompletionRequest
 from sglang.srt.entrypoints.openai.serving_completions import OpenAIServingCompletion
@@ -255,6 +264,68 @@ class ServingCompletionTestCase(unittest.TestCase):
         # Check that there is an error chunk and a DONE chunk, and possibly a role chunk
         self.assertGreaterEqual(len(chunks), 2)
         self.assertIn("error", chunks[0])
+
+    def test_streaming_completion_allows_intermediate_chunk_without_finish_reason(self):
+        """Test streaming completion chunks before the final finish reason."""
+
+        async def _mock_generate_chunks(*args, **kwargs):
+            yield {
+                "text": "Hello",
+                "meta_info": {
+                    "id": "cmpl-test",
+                    "prompt_tokens": 3,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                    "finish_reason": None,
+                },
+                "index": 0,
+            }
+            yield {
+                "text": "Hello world",
+                "meta_info": {
+                    "id": "cmpl-test",
+                    "prompt_tokens": 3,
+                    "completion_tokens": 2,
+                    "cached_tokens": 0,
+                    "finish_reason": {"type": "stop", "matched": None},
+                },
+                "index": 0,
+            }
+
+        self.sc.tokenizer_manager.generate_request = _mock_generate_chunks
+
+        req = CompletionRequest(
+            model="x",
+            prompt="Hello",
+            max_tokens=100,
+            stream=True,
+        )
+        adapted_request, _ = self.sc._convert_to_internal_request(req)
+
+        async def run_stream():
+            chunks = []
+            async for chunk in self.sc._generate_completion_stream(
+                adapted_request, req, self.fastapi_request
+            ):
+                chunks.append(chunk)
+            return chunks
+
+        loop = get_or_create_event_loop()
+        chunks = loop.run_until_complete(run_stream())
+
+        data_chunks = [
+            json.loads(chunk[len("data: ") :])
+            for chunk in chunks
+            if chunk.startswith("data: ") and chunk.strip() != "data: [DONE]"
+        ]
+        choice_chunks = [chunk for chunk in data_chunks if chunk.get("choices")]
+
+        self.assertEqual(len(choice_chunks), 2)
+        self.assertEqual(choice_chunks[0]["choices"][0]["text"], "Hello")
+        self.assertIsNone(choice_chunks[0]["choices"][0]["finish_reason"])
+        self.assertEqual(choice_chunks[1]["choices"][0]["text"], " world")
+        self.assertEqual(choice_chunks[1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(chunks[-1], "data: [DONE]\n\n")
 
     def test_non_streaming_cached_tokens_details_emits_sglext(self):
         """Test that non-streaming completion responses emit cached token details in sglext."""
