@@ -101,13 +101,30 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
 
         self.assertEqual(Scheduler._active_admitted_request_count(scheduler), 2)
 
-    def test_capacity_limit_replaces_static_queue_limit_when_enabled(self):
+    def test_static_queue_limit_still_applies_when_capacity_mode_enabled(self):
         scheduler = _scheduler(
             waiting=3,
             running=0,
             grammar=0,
             max_running_requests=4,
             max_queued_requests=1,
+            limit_admitted_requests_to_running_capacity=True,
+        )
+
+        self.assertTrue(Scheduler._abort_on_queued_limit(scheduler, _req("incoming")))
+
+        out, req = scheduler.send_to_tokenizer.send_output.call_args.args
+        self.assertEqual(req.rid, "incoming")
+        self.assertEqual(out.finished_reason["status_code"], 429)
+        self.assertEqual(out.finished_reason["message"], "The request queue is full.")
+
+    def test_capacity_mode_allows_queue_when_both_limits_have_room(self):
+        scheduler = _scheduler(
+            waiting=1,
+            running=1,
+            grammar=0,
+            max_running_requests=4,
+            max_queued_requests=3,
             limit_admitted_requests_to_running_capacity=True,
         )
 

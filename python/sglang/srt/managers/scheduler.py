@@ -2302,8 +2302,10 @@ class Scheduler(
         if (
             getattr(self, "limit_admitted_requests_to_running_capacity", False)
             and self.max_running_requests is not None
+            and self._active_admitted_request_count() + 1
+            > self.max_running_requests
         ):
-            return self._active_admitted_request_count() + 1 > self.max_running_requests
+            return True
 
         return (
             self.max_queued_requests is not None

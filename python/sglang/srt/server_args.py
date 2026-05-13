@@ -4602,7 +4602,7 @@ class ServerArgs:
             "--limit-admitted-requests-to-running-capacity",
             action="store_true",
             default=ServerArgs.limit_admitted_requests_to_running_capacity,
-            help="Reject new requests once the total admitted scheduler work reaches --max-running-requests, instead of allowing an additional --max-queued-requests backlog.",
+            help="Reject new requests once total admitted scheduler work reaches --max-running-requests while still enforcing --max-queued-requests.",
         )
         parser.add_argument(
             "--max-total-tokens",
