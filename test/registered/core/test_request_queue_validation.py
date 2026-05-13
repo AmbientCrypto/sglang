@@ -42,6 +42,7 @@ class TestMaxQueuedRequests(CustomTestCase):
                 "1",
                 "--max-queued-requests",  # Enforce max queued request number is 1
                 "1",
+                "--limit-admitted-requests-to-running-capacity",
                 "--attention-backend",
                 "triton",
             ),

@@ -1,3 +1,4 @@
+import argparse
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -15,6 +16,7 @@ for name in (
         setattr(cuda_memory, name, lambda *_, **__: None)
 
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.server_args import ServerArgs
 
 register_cpu_ci(est_time=2, suite="stage-a-test-cpu")
 
@@ -45,7 +47,7 @@ def _scheduler(
     chunked=False,
     max_running_requests=4,
     max_queued_requests=1,
-    limit_queue_to_running_capacity=True,
+    limit_admitted_requests_to_running_capacity=True,
 ):
     scheduler = Scheduler.__new__(Scheduler)
     scheduler.waiting_queue = [_req(f"waiting-{i}") for i in range(waiting)]
@@ -64,7 +66,9 @@ def _scheduler(
     )
     scheduler.max_running_requests = max_running_requests
     scheduler.max_queued_requests = max_queued_requests
-    scheduler.limit_queue_to_running_capacity = limit_queue_to_running_capacity
+    scheduler.limit_admitted_requests_to_running_capacity = (
+        limit_admitted_requests_to_running_capacity
+    )
     scheduler.enable_priority_scheduling = False
     scheduler.enable_hicache_storage = False
     scheduler.enable_hierarchical_cache = False
@@ -104,7 +108,7 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             grammar=0,
             max_running_requests=4,
             max_queued_requests=1,
-            limit_queue_to_running_capacity=True,
+            limit_admitted_requests_to_running_capacity=True,
         )
 
         self.assertFalse(Scheduler._abort_on_queued_limit(scheduler, _req("incoming")))
@@ -117,7 +121,7 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             grammar=1,
             max_running_requests=4,
             max_queued_requests=16,
-            limit_queue_to_running_capacity=True,
+            limit_admitted_requests_to_running_capacity=True,
         )
         incoming = _req("incoming")
 
@@ -139,7 +143,7 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             grammar=0,
             max_running_requests=128,
             max_queued_requests=1,
-            limit_queue_to_running_capacity=False,
+            limit_admitted_requests_to_running_capacity=False,
         )
 
         self.assertTrue(Scheduler._abort_on_queued_limit(scheduler, _req("incoming")))
@@ -150,7 +154,7 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             running=0,
             max_running_requests=128,
             max_queued_requests=1,
-            limit_queue_to_running_capacity=False,
+            limit_admitted_requests_to_running_capacity=False,
         )
         scheduler.enable_priority_scheduling = True
         scheduler.schedule_low_priority_values_first = False
@@ -170,7 +174,7 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             running=0,
             max_running_requests=128,
             max_queued_requests=1,
-            limit_queue_to_running_capacity=False,
+            limit_admitted_requests_to_running_capacity=False,
         )
         scheduler.enable_priority_scheduling = True
         scheduler.schedule_low_priority_values_first = False
@@ -187,6 +191,21 @@ class TestSchedulerAdmissionLimit(unittest.TestCase):
             out.finished_reason["message"],
             "The request is aborted by a higher priority request.",
         )
+
+    def test_server_arg_enables_capacity_limit(self):
+        parser = argparse.ArgumentParser()
+        ServerArgs.add_cli_args(parser)
+
+        args = parser.parse_args(
+            [
+                "--model-path",
+                "dummy",
+                "--limit-admitted-requests-to-running-capacity",
+            ]
+        )
+        server_args = ServerArgs.from_cli_args(args)
+
+        self.assertTrue(server_args.limit_admitted_requests_to_running_capacity)
 
 
 if __name__ == "__main__":

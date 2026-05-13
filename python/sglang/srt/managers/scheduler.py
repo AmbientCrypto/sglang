@@ -15,7 +15,6 @@
 
 import faulthandler
 import logging
-import os
 import signal
 import sys
 import time
@@ -28,14 +27,6 @@ from typing import Any, Deque, Dict, List, Optional, Tuple, Union
 from sglang.srt.utils.common import suppress_noisy_warnings
 
 suppress_noisy_warnings()
-
-_QUEUE_TO_RUNNING_CAPACITY_ENV = "SGLANG_LIMIT_QUEUE_TO_RUNNING_CAPACITY"
-_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
-
-
-def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in _TRUTHY_ENV_VALUES
-
 
 import psutil
 import setproctitle
@@ -1044,8 +1035,8 @@ class Scheduler(
 
     def init_running_status(self):
         self.waiting_queue: List[Req] = []
-        self.limit_queue_to_running_capacity = _env_truthy(
-            _QUEUE_TO_RUNNING_CAPACITY_ENV
+        self.limit_admitted_requests_to_running_capacity = (
+            self.server_args.limit_admitted_requests_to_running_capacity
         )
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
@@ -2309,7 +2300,7 @@ class Scheduler(
 
     def _queued_limit_reached(self) -> bool:
         if (
-            getattr(self, "limit_queue_to_running_capacity", False)
+            getattr(self, "limit_admitted_requests_to_running_capacity", False)
             and self.max_running_requests is not None
         ):
             return self._active_admitted_request_count() + 1 > self.max_running_requests
